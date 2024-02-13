@@ -45,11 +45,6 @@ PathLike = Path | str
 
 APP_PATH = Path(__file__).resolve().parent
 REFERENCE_VIDEOS_PATH = APP_PATH / "reference-videos"
-MACHINE = platform.machine()
-UNTRUNC_EXECUTABLE = (
-    f"untrunc-{MACHINE}.exe" if platform.system() == "Windows" else f"untrunc-{MACHINE}"
-)
-UNTRUNC_PATH = APP_PATH / "untrunc" / UNTRUNC_EXECUTABLE
 RECOVERED_TEMP_FILES_DIRECTORY_NAME = "pl_recover_tmp_files"
 HW_VS_SW_DELTA_THRESHOLD_SECONDS = 0.5
 structlog.configure(
@@ -90,15 +85,9 @@ def untrunc_video(
     good_video_path: PathLike,
     fixed_video_path: PathLike,
 ):
-    if not UNTRUNC_PATH.exists():
-        raise RuntimeError(
-            f"{UNTRUNC_PATH} does not exist, "
-            f"this tool may not be compatible with current platform"
-        )
-
     return run_command(
         [
-            UNTRUNC_PATH,
+            "untrunc",
             "-dst",
             str(fixed_video_path),
             str(good_video_path),
