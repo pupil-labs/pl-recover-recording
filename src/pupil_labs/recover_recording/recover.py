@@ -180,7 +180,7 @@ class RecordingVideo:
         class Paths:
             original = self.path
             time_file = self.path.with_suffix(".time")
-            backup = self.path.with_suffix(".original.mp4")
+            backup = self.path.with_suffix(".mp4.original.mp4")
 
             untrunced = self.temp_files / self.path.with_suffix(".untrunced.mp4").name
             untrunced_audio = (
@@ -320,7 +320,7 @@ class RecordingFixer:
             )
             if isinstance(fixed_json, dict):
                 logger.info("json file has error and is recoverable", path=file_path)
-                backup_file_path = file_path.with_suffix(".original.json")
+                backup_file_path = file_path.with_suffix(".json.original.json")
                 if not backup_file_path:
                     shutil.move(file_path, backup_file_path)
                 (self.rec_path / file_path.name).write_bytes(new_json_bytes)
@@ -408,7 +408,7 @@ class RecordingFixer:
             issues.append("missing recording.end in event.txt")
 
         if missing_recording_begin or missing_recording_end:
-            backup_event_time_path = event_time_path.with_suffix(".original.time")
+            backup_event_time_path = event_time_path.with_suffix("time.original.time")
             if not backup_event_time_path.exists():
                 logger.info("backing up event.time", path=backup_event_time_path)
                 shutil.move(event_time_path, backup_event_time_path)
@@ -416,7 +416,7 @@ class RecordingFixer:
             logger.info("writing new event.time file")
             np.array(event_timestamps, "<u8").tofile(event_time_path)
 
-            backup_event_text_path = event_time_path.with_suffix(".original.txt")
+            backup_event_text_path = event_time_path.with_suffix(".txt.original.txt")
             if not backup_event_text_path.exists():
                 logger.info("backing up event.txt", path=backup_event_text_path)
                 shutil.move(event_text_path, backup_event_text_path)
@@ -438,37 +438,66 @@ class RecordingFixer:
             if file_path.suffix == ".time_aux":
                 time_file_path = file_path.with_suffix(".time")
                 time_hw_file_path = file_path.with_suffix(".time_hw")
-                time_sw_file_path = file_path.with_suffix(".time_aux")
-
-                if time_hw_file_path in file_paths:
-                    # already replaced, ignore
-                    continue
+                time_backup_file_path = file_path.with_suffix(".time.original.time")
+                time_aux_file_path = file_path.with_suffix(".time_aux")
+                time_aux_backup_file_path = file_path.with_suffix(
+                    ".time_aux.original.time_aux"
+                )
 
                 if (
                     not time_file_path
-                    or not time_sw_file_path.stat().st_size
+                    or not time_aux_file_path.stat().st_size
                     or not time_file_path.stat().st_size
                 ):
                     continue
 
-                sw_ts = np.frombuffer(time_file_path.read_bytes(), "<i8")
-                hw_ts = np.frombuffer(time_sw_file_path.read_bytes(), "<i8")
-                max_delta_secs = np.abs((hw_ts - sw_ts)).max() / 1e9
-                if max_delta_secs > HW_VS_SW_DELTA_THRESHOLD_SECONDS:
+                hw_ts = np.fromfile(time_file_path, "<i8")
+                if not np.all(hw_ts[1:] >= hw_ts[:-1]):
                     logger.warning(
-                        "sw and hw timestamps differ",
-                        threshold=HW_VS_SW_DELTA_THRESHOLD_SECONDS,
-                        diff_secs=max_delta_secs,
-                        hw=time_file_path,
-                        sw=time_sw_file_path,
+                        f"hw timestamps not monotonic",
+                        path=time_file_path,
                     )
-                    issues.append(f"sw and hw timestamps differ for {time_file_path}")
-                    logger.info("backing up .time to .time_hw", path=time_file_path)
-                    shutil.move(time_file_path, time_hw_file_path)
+                    issues.append(f"hw timestamps not monotonic for {time_file_path}")
+                    if not time_backup_file_path.exists():
+                        shutil.copy(time_file_path, time_backup_file_path)
+                    hw_ts.sort()
+                    hw_ts.tofile(time_file_path, format="<u8")
+
+                sw_ts = np.fromfile(time_aux_file_path, "<i8")
+                if not np.all(sw_ts[1:] >= sw_ts[:-1]):
                     logger.warning(
-                        "replacing .time with .time_aux", path=time_file_path
+                        f"sw timestamps not monotonic",
+                        path=time_aux_file_path,
                     )
-                    shutil.move(time_sw_file_path, time_file_path)
+                    issues.append(
+                        f"sw timestamps not monotonic for {time_aux_file_path}"
+                    )
+                    if not time_aux_backup_file_path.exists():
+                        shutil.copy(time_aux_file_path, time_aux_backup_file_path)
+                    sw_ts.sort()
+                    sw_ts.tofile(time_aux_file_path, format="<u8")
+
+                if time_hw_file_path not in file_paths:
+                    max_delta_secs = np.abs((hw_ts - sw_ts)).max() / 1e9
+                    if max_delta_secs > HW_VS_SW_DELTA_THRESHOLD_SECONDS:
+                        logger.warning(
+                            "hw timestamps seem incorrect",
+                            threshold=HW_VS_SW_DELTA_THRESHOLD_SECONDS,
+                            diff_secs=max_delta_secs,
+                            hw=time_file_path,
+                            sw=time_aux_file_path,
+                        )
+                        issues.append(
+                            f"sw and hw timestamps differ for {time_file_path}"
+                        )
+                        logger.info("copying .time to .time_hw", path=time_file_path)
+                        shutil.copy(time_file_path, time_hw_file_path)
+                        logger.warning(
+                            "replacing .time with sw timestamps", path=time_file_path
+                        )
+                        if not time_backup_file_path.exists():
+                            shutil.copy(time_file_path, time_backup_file_path)
+                        shutil.move(time_aux_file_path, time_file_path)
         return issues
 
     def process(self):
