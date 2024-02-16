@@ -321,7 +321,8 @@ class RecordingFixer:
             if isinstance(fixed_json, dict):
                 logger.info("json file has error and is recoverable", path=file_path)
                 backup_file_path = file_path.with_suffix(".json.original.json")
-                if not backup_file_path:
+                if not backup_file_path.exists():
+                    logger.info("backing up json", path=backup_file_path)
                     shutil.move(file_path, backup_file_path)
                 (self.rec_path / file_path.name).write_bytes(new_json_bytes)
             else:
@@ -333,11 +334,40 @@ class RecordingFixer:
 
         return issues
 
+    def _find_max_timestamp_from_time_files(self):
+        max_timestamp = 0
+        for file in self.rec_path.glob("*.time"):
+            if "original" in file.name:
+                continue
+            timestamps = np.fromfile(file, "<u8")
+            max_timestamp = max(max_timestamp, timestamps.max())
+        return int(max_timestamp)
+
+    def _process_info_json(self):
+        issues = []
+        info_json_file = self.rec_path / "info.json"
+        info_json_backup_file = self.rec_path / "info.json.original.json"
+        info = json.loads(info_json_file.read_bytes())
+        if not info.get("duration"):
+            logger.warning("info.json had 0 duration", path=info_json_file)
+            issues.append("info.json had 0 duration")
+            max_timestamp = self._find_max_timestamp_from_time_files()
+            info["duration"] = max_timestamp - info["start_time"]
+            if not info_json_backup_file.exists():
+                logger.info("backing up info.json", path=info_json_backup_file)
+                shutil.move(info_json_file, info_json_backup_file)
+
+            new_json_bytes = json.dumps(info, indent=2, sort_keys=True).encode("UTF-8")
+            info_json_file.write_bytes(new_json_bytes)
+        return issues
+
     def _process_json_files(self):
         logger.info("checking json files")
 
         issues = []
         for json_file_path in self.rec_path.glob("*.json"):
+            if "original" in json_file_path.name:
+                continue
             if not JSON_KIND_FILE_PATTERN.findall(json_file_path.name):
                 continue
             logger.debug("checking json file", path=json_file_path)
@@ -435,11 +465,14 @@ class RecordingFixer:
         ]
 
         for file_path in file_paths:
+            if "original" in file_path.name:
+                continue
+
             if file_path.suffix == ".time_aux":
                 time_file_path = file_path.with_suffix(".time")
                 time_hw_file_path = file_path.with_suffix(".time_hw")
                 time_backup_file_path = file_path.with_suffix(".time.original.time")
-                time_aux_file_path = file_path.with_suffix(".time_aux")
+                time_aux_file_path = file_path
                 time_aux_backup_file_path = file_path.with_suffix(
                     ".time_aux.original.time_aux"
                 )
@@ -507,6 +540,7 @@ class RecordingFixer:
         try:
             issues.extend(self._process_json_files())
             issues.extend(self._process_time_files())
+            issues.extend(self._process_info_json())
             issues.extend(self._process_event_files())
             issues.extend(self._process_video_files())
         finally:
