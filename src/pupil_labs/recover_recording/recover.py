@@ -408,7 +408,7 @@ class RecordingFixer:
             issues.append("missing recording.end in event.txt")
 
         if missing_recording_begin or missing_recording_end:
-            backup_event_time_path = event_time_path.with_suffix("time.original.time")
+            backup_event_time_path = event_time_path.with_suffix(".time.original.time")
             if not backup_event_time_path.exists():
                 logger.info("backing up event.time", path=backup_event_time_path)
                 shutil.move(event_time_path, backup_event_time_path)
