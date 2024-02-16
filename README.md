@@ -9,7 +9,7 @@ header error.
 
 1. Install Python 3.10 or higher
 2. ```bash
-   $ pip install -e git+https://github.com/pupil-labs/pl-recover-recording.git#egg=pupil_labs_recover_recording
+   $ pip install -e git+https://github.com/pupil-labs/pl-recover-recording.git#egg=pl-recover-recording
    ```
 
 ## Usage
