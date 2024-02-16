@@ -47,6 +47,7 @@ APP_PATH = Path(__file__).resolve().parent
 REFERENCE_VIDEOS_PATH = APP_PATH / "reference-videos"
 RECOVERED_TEMP_FILES_DIRECTORY_NAME = "pl_recover_tmp_files"
 HW_VS_SW_DELTA_THRESHOLD_SECONDS = 0.5
+MAX_RECORDING_DURATION = 6 * 1e9  # 6 hours
 structlog.configure(
     logger_factory=structlog.PrintLoggerFactory(sys.stderr),
 )
@@ -352,13 +353,17 @@ class RecordingFixer:
             logger.warning("info.json had 0 duration", path=info_json_file)
             issues.append("info.json had 0 duration")
             max_timestamp = self._find_max_timestamp_from_time_files()
-            info["duration"] = max_timestamp - info["start_time"]
-            if not info_json_backup_file.exists():
-                logger.info("backing up info.json", path=info_json_backup_file)
-                shutil.move(info_json_file, info_json_backup_file)
+            potential_duration = max_timestamp - info["start_time"]
 
-            new_json_bytes = json.dumps(info, indent=2, sort_keys=True).encode("UTF-8")
-            info_json_file.write_bytes(new_json_bytes)
+            if potential_duration < MAX_RECORDING_DURATION:
+                if not info_json_backup_file.exists():
+                    logger.info("backing up info.json", path=info_json_backup_file)
+                    shutil.move(info_json_file, info_json_backup_file)
+
+                new_json_bytes = json.dumps(info, indent=2, sort_keys=True).encode(
+                    "UTF-8"
+                )
+                info_json_file.write_bytes(new_json_bytes)
         return issues
 
     def _process_json_files(self):
