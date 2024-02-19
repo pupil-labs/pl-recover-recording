@@ -55,12 +55,18 @@ structlog.configure(
 logger = structlog.get_logger()
 
 
+class NoVideoStreamException(Exception): ...
+
+
 def get_container_error(video_file_path):
     try:
         container = av.open(str(video_file_path))
         container.seek(1)
     except Exception as exc:
         return exc
+
+    if len(container.streams.video) == 0:
+        return NoVideoStreamException()
 
 
 def run_command(args: list[str]):
@@ -237,8 +243,13 @@ class RecordingVideo:
 
     def recover(self):
         error = self.error
-        if isinstance(error, av.error.InvalidDataError):
+        if isinstance(error, NoVideoStreamException):
+            self.logger.warning("no video stream detected", path=self.path)
+        elif isinstance(error, av.error.InvalidDataError):
             error_message = error.log[-1]
+            self.logger.warning(
+                "error in container detected", path=self.path, error=error_message
+            )
             if "header" in error_message or "moov" in error_message:
                 self.logger.info(
                     "untruncating broken video", path=self.path, error=error_message
