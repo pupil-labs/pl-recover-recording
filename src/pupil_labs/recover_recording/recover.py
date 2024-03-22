@@ -450,7 +450,7 @@ class RecordingFixer:
             logger.warning("missing recording.end event")
             event_names = event_names + ["recording.end"]
             rec_end_time = info["start_time"] + info["duration"]
-            event_timestamps = np.concatenate([[rec_end_time], event_timestamps])
+            event_timestamps = np.concatenate([event_timestamps, [rec_end_time]])
             issues.append("missing recording.end in event.txt")
 
         if missing_recording_begin or missing_recording_end:
