@@ -47,7 +47,7 @@ APP_PATH = Path(__file__).resolve().parent
 REFERENCE_VIDEOS_PATH = APP_PATH / "reference-videos"
 RECOVERED_TEMP_FILES_DIRECTORY_NAME = "pl_recover_tmp_files"
 HW_VS_SW_DELTA_THRESHOLD_SECONDS = 0.5
-MAX_RECORDING_DURATION = 6 * 1e9  # 6 hours
+MAX_RECORDING_DURATION_NANOSECS = 7 * 60 * 60 * 1e9  # 7 hours
 structlog.configure(
     logger_factory=structlog.PrintLoggerFactory(sys.stderr),
 )
@@ -360,13 +360,15 @@ class RecordingFixer:
         info_json_file = self.rec_path / "info.json"
         info_json_backup_file = self.rec_path / "info.json.original.json"
         info = json.loads(info_json_file.read_bytes())
-        if not info.get("duration"):
+
+        duration = info.get("duration")
+        if not duration or duration > MAX_RECORDING_DURATION_NANOSECS:
             logger.warning("info.json had 0 duration", path=info_json_file)
             issues.append("info.json had 0 duration")
             max_timestamp = self._find_max_timestamp_from_time_files()
             potential_duration = max_timestamp - info["start_time"]
 
-            if potential_duration < MAX_RECORDING_DURATION:
+            if potential_duration < MAX_RECORDING_DURATION_NANOSECS:
                 if not info_json_backup_file.exists():
                     logger.info("backing up info.json", path=info_json_backup_file)
                     shutil.move(info_json_file, info_json_backup_file)
