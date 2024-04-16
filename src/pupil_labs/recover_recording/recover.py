@@ -44,7 +44,7 @@ from rich.progress import Progress, track
 PathLike = Path | str
 
 APP_PATH = Path(__file__).resolve().parent
-REFERENCE_VIDEOS_PATH = APP_PATH / "reference-videos"
+REFERENCE_VIDEOS_DIRECTORY = APP_PATH / "reference-videos"
 RECOVERED_TEMP_FILES_DIRECTORY_NAME = "pl_recover_tmp_files"
 HW_VS_SW_DELTA_THRESHOLD_SECONDS = 0.5
 MAX_RECORDING_DURATION_NANOSECS = 7 * 60 * 60 * 1e9  # 7 hours
@@ -56,6 +56,28 @@ logger = structlog.get_logger()
 
 
 class NoVideoStreamException(Exception): ...
+
+
+class VideoKind(enum.Enum):
+    NEON_SENSOR_MODULE = enum.auto()
+    NEON_SCENE_CAMERA = enum.auto()
+    PI_WORLD_CAMERA = enum.auto()
+
+
+VIDEO_KIND_FILE_PATTERNS = {
+    VideoKind.NEON_SCENE_CAMERA: re.compile(r"^Neon Scene Camera v1 ps(\d+)\.mp4$"),
+    VideoKind.NEON_SENSOR_MODULE: re.compile(r"^Neon Sensor Module v1 ps(\d+)\.mp4$"),
+    VideoKind.PI_WORLD_CAMERA: re.compile(r"^PI world v1 ps(\d+)\.mp4$"),
+}
+REFERENCE_VIDEO_PATHS = {
+    VideoKind.NEON_SCENE_CAMERA: REFERENCE_VIDEOS_DIRECTORY / "neon-scene-ref.mp4",
+    VideoKind.NEON_SENSOR_MODULE: REFERENCE_VIDEOS_DIRECTORY / "neon-sensor-ref.mp4",
+    VideoKind.PI_WORLD_CAMERA: REFERENCE_VIDEOS_DIRECTORY / "pi-world-ref.mp4",
+}
+
+VIDEO_KINDS_WITH_AUDIO = {VideoKind.NEON_SCENE_CAMERA, VideoKind.PI_WORLD_CAMERA}
+JSON_KIND_FILE_PATTERN = re.compile(r"^(info|template|wearer)\.json$")
+TIME_KIND_FILE_PATTERN = re.compile(r"^.+\.time_?(hw|aux)?$")
 
 
 def get_container_error(video_file_path):
@@ -137,28 +159,15 @@ def combine_video_audio(
     ffmpeg_combine_video_audio_args = [
         "ffmpeg",
         "-i",
-        video_path,
+        str(video_path),
         "-i",
-        audio_path,
+        str(audio_path),
         "-c",
         "copy",
-        output_path,
+        str(output_path),
         "-y",
     ]
     return run_command(ffmpeg_combine_video_audio_args)
-
-
-class VideoKind(enum.Enum):
-    NEON_SENSOR_MODULE = enum.auto()
-    NEON_SCENE_CAMERA = enum.auto()
-
-
-VIDEO_KIND_FILE_PATTERNS = {
-    VideoKind.NEON_SCENE_CAMERA: re.compile(r"^Neon Scene Camera v1 ps(\d+)\.mp4$"),
-    VideoKind.NEON_SENSOR_MODULE: re.compile(r"^Neon Sensor Module v1 ps(\d+)\.mp4$"),
-}
-JSON_KIND_FILE_PATTERN = re.compile(r"^(info|template|wearer)\.json$")
-TIME_KIND_FILE_PATTERN = re.compile(r"^.+\.time_?(hw|aux)?$")
 
 
 @dataclass
@@ -167,10 +176,11 @@ class RecordingVideo:
     logger: structlog.BoundLogger = logger
 
     @property
-    def kind(self) -> VideoKind:
+    def kind(self) -> VideoKind | None:
         for video_kind, pattern in VIDEO_KIND_FILE_PATTERNS.items():
             if pattern.findall(self.path.name):
                 return video_kind
+        return None
 
     @property
     def error(self):
@@ -206,11 +216,10 @@ class RecordingVideo:
 
     @property
     def reference_video_path(self):
-        if self.kind == VideoKind.NEON_SCENE_CAMERA:
-            return REFERENCE_VIDEOS_PATH / "neon-scene-ref.mp4"
-        if self.kind == VideoKind.NEON_SENSOR_MODULE:
-            return REFERENCE_VIDEOS_PATH / "neon-sensor-ref.mp4"
-        raise RuntimeError(f"no reference video for kind: {self.kind}")
+        video_path = REFERENCE_VIDEO_PATHS.get(self.kind)
+        if not video_path:
+            raise RuntimeError(f"no reference video for kind: {self.kind}")
+        return video_path
 
     def extract_untrunced_audio(self):
         ffmpeg_extract_audio_args = [
@@ -257,7 +266,7 @@ class RecordingVideo:
                 untrunc_video(
                     self.path, self.reference_video_path, self.paths.untrunced
                 )
-                if self.kind == VideoKind.NEON_SCENE_CAMERA:
+                if self.kind in VIDEO_KINDS_WITH_AUDIO:
                     self.extract_untrunced_audio()
                 self.extract_untrunced_video()
 
@@ -267,7 +276,7 @@ class RecordingVideo:
                     self.paths.remuxed_video,
                 )
 
-                if self.kind == VideoKind.NEON_SCENE_CAMERA:
+                if self.kind in VIDEO_KINDS_WITH_AUDIO:
                     self.logger.info("combining audio and video tracks", path=self.path)
                     logger.info("combining video/audio tracks")
                     combine_video_audio(
