@@ -333,23 +333,32 @@ class RecordingFixer:
         except json.JSONDecodeError as decode_error:
             logger.warning("json file had error", path=file_path, error=decode_error)
             issues.append(f"{file_path} had invalid json: {str(decode_error)}")
-            valid_part = json_bytes[: decode_error.pos]
-            fixed_json = json.loads(valid_part)
 
-            new_json_bytes = json.dumps(fixed_json, indent=2, sort_keys=True).encode(
-                "UTF-8"
-            )
-            if isinstance(fixed_json, dict):
-                logger.info("json file has error and is recoverable", path=file_path)
-                backup_file_path = file_path.with_suffix(".json.original.json")
-                if not backup_file_path.exists():
-                    logger.info("backing up json", path=backup_file_path)
-                    shutil.move(file_path, backup_file_path)
-                (self.rec_path / file_path.name).write_bytes(new_json_bytes)
-            else:
+            # remove invalid part of json
+            maybe_valid_part = json_bytes[: decode_error.pos]
+            try:
+                fixed_json = json.loads(maybe_valid_part)
+            except json.JSONDecodeError:
                 logger.error(
                     "json file has error and is not recoverable", path=file_path
                 )
+            else:
+                new_json_bytes = json.dumps(
+                    fixed_json, indent=2, sort_keys=True
+                ).encode("UTF-8")
+                if isinstance(fixed_json, dict):
+                    logger.info(
+                        "json file has error and is recoverable", path=file_path
+                    )
+                    backup_file_path = file_path.with_suffix(".json.original.json")
+                    if not backup_file_path.exists():
+                        logger.info("backing up json", path=backup_file_path)
+                        shutil.move(file_path, backup_file_path)
+                    (self.rec_path / file_path.name).write_bytes(new_json_bytes)
+                else:
+                    logger.error(
+                        "json file has error and is not recoverable", path=file_path
+                    )
         else:
             logger.info("json has no error, skipping", path=file_path)
 
