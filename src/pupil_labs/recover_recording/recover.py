@@ -391,6 +391,7 @@ class RecordingFixer:
                     logger.info("backing up info.json", path=info_json_backup_file)
                     shutil.move(info_json_file, info_json_backup_file)
 
+                info["duration"] = int(potential_duration)
                 new_json_bytes = json.dumps(info, indent=2, sort_keys=True).encode(
                     "UTF-8"
                 )
