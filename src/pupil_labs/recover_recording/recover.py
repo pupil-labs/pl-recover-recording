@@ -144,10 +144,14 @@ def remux_video_with_timestamps(
     )
     with av.open(str(output_file_path), "w") as output_container:
         output_video_stream = output_container.add_stream(template=input_video_stream)
+        previous_pts = None
         for offset_in_nanoseconds, packet in frame_stream:
             if packet.pts is None:
                 continue
             new_pts = int(round(offset_in_nanoseconds / 1e9 / packet.time_base))
+            if previous_pts is not None and previous_pts == new_pts:
+                new_pts += 1
+            previous_pts = new_pts
             packet.dts = packet.pts = new_pts
             packet.stream = output_video_stream
             output_container.mux_one(packet)
@@ -522,7 +526,7 @@ class RecordingFixer:
                     continue
 
                 hw_ts = np.fromfile(time_file_path, "<i8")
-                if not np.all(hw_ts[1:] >= hw_ts[:-1]):
+                if not np.all(np.diff(hw_ts) > 0):
                     logger.warning(
                         f"hw timestamps not monotonic",
                         path=time_file_path,
@@ -534,7 +538,7 @@ class RecordingFixer:
                     hw_ts.tofile(time_file_path, format="<u8")
 
                 sw_ts = np.fromfile(time_aux_file_path, "<i8")
-                if not np.all(sw_ts[1:] >= sw_ts[:-1]):
+                if not np.all(np.diff(sw_ts) > 0):
                     logger.warning(
                         f"sw timestamps not monotonic",
                         path=time_aux_file_path,
