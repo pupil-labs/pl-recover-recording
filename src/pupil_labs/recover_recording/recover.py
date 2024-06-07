@@ -62,17 +62,22 @@ class VideoKind(enum.Enum):
     NEON_SENSOR_MODULE = enum.auto()
     NEON_SCENE_CAMERA = enum.auto()
     PI_WORLD_CAMERA = enum.auto()
+    PI_EYE_CAMERA_MP4 = enum.auto()
+    PI_EYE_CAMERA_MJPEG = enum.auto()
 
 
 VIDEO_KIND_FILE_PATTERNS = {
     VideoKind.NEON_SCENE_CAMERA: re.compile(r"^Neon Scene Camera v1 ps(\d+)\.mp4$"),
     VideoKind.NEON_SENSOR_MODULE: re.compile(r"^Neon Sensor Module v1 ps(\d+)\.mp4$"),
     VideoKind.PI_WORLD_CAMERA: re.compile(r"^PI world v1 ps(\d+)\.mp4$"),
+    VideoKind.PI_EYE_CAMERA_MP4: re.compile(r"^PI (left|right) v1 ps(\d+)\.mp4$"),
 }
+
 REFERENCE_VIDEO_PATHS = {
     VideoKind.NEON_SCENE_CAMERA: REFERENCE_VIDEOS_DIRECTORY / "neon-scene-ref.mp4",
     VideoKind.NEON_SENSOR_MODULE: REFERENCE_VIDEOS_DIRECTORY / "neon-sensor-ref.mp4",
     VideoKind.PI_WORLD_CAMERA: REFERENCE_VIDEOS_DIRECTORY / "pi-world-ref.mp4",
+    VideoKind.PI_EYE_CAMERA_MP4: REFERENCE_VIDEOS_DIRECTORY / "pi-eye-ref.mp4",
 }
 
 VIDEO_KINDS_WITH_AUDIO = {VideoKind.NEON_SCENE_CAMERA, VideoKind.PI_WORLD_CAMERA}
