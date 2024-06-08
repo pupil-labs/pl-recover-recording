@@ -25,7 +25,6 @@ sudo cp untrunc /usr/local/bin
 import enum
 import io
 import json
-import platform
 import re
 import shlex
 import shutil
@@ -33,9 +32,11 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Annotated
 
 import av
 import av.error
+import av.video
 import numpy as np
 import structlog
 import typer
@@ -56,6 +57,10 @@ logger = structlog.get_logger()
 
 
 class NoVideoStreamException(Exception): ...
+
+
+class DEFAULTS:
+    resize_video: bool = False
 
 
 class VideoKind(enum.Enum):
@@ -79,7 +84,12 @@ REFERENCE_VIDEO_PATHS = {
     VideoKind.PI_WORLD_CAMERA: REFERENCE_VIDEOS_DIRECTORY / "pi-world-ref.mp4",
     VideoKind.PI_EYE_CAMERA_MP4: REFERENCE_VIDEOS_DIRECTORY / "pi-eye-ref.mp4",
 }
-
+EXPECTED_VIDEO_RESOLUTIONS = {
+    VideoKind.NEON_SCENE_CAMERA: (1600, 1200),
+    VideoKind.NEON_SENSOR_MODULE: (384, 192),
+    VideoKind.PI_WORLD_CAMERA: (1088, 1080),
+    VideoKind.PI_EYE_CAMERA_MP4: (192, 192),
+}
 VIDEO_KINDS_WITH_AUDIO = {VideoKind.NEON_SCENE_CAMERA, VideoKind.PI_WORLD_CAMERA}
 JSON_KIND_FILE_PATTERN = re.compile(r"^(info|template|wearer)\.json$")
 TIME_KIND_FILE_PATTERN = re.compile(r"^.+\.time_?(hw|aux)?$")
@@ -91,9 +101,6 @@ def get_container_error(video_file_path):
         container.seek(1)
     except Exception as exc:
         return exc
-
-    if len(container.streams.video) == 0:
-        return NoVideoStreamException()
 
 
 def run_command(args: list[str]):
@@ -162,6 +169,36 @@ def remux_video_with_timestamps(
             output_container.mux_one(packet)
 
 
+def resize_video(
+    video_path: PathLike,
+    output_path: PathLike,
+    resolution: tuple[int, int],
+):
+    stream = av.open(str(video_path)).streams.video[0]
+    stream_resolution = (stream.width, stream.height)
+    if stream_resolution == resolution:
+        logger.warning("video already at resolution", resolution=resolution)
+        return
+    bitrate = f"{round(stream.bit_rate / 1e6, 1)}M"
+    width, height = resolution
+    ffmpeg_resize_args = [
+        "ffmpeg",
+        "-vsync",
+        "vfr",
+        "-i",
+        str(video_path),
+        "-b:v",
+        bitrate,
+        "-r",
+        "90000",
+        "-vf",
+        f"scale={width}:{height}",
+        str(output_path),
+        "-y",
+    ]
+    return run_command(ffmpeg_resize_args)
+
+
 def combine_video_audio(
     video_path: PathLike, audio_path: PathLike, output_path: PathLike
 ):
@@ -180,7 +217,7 @@ def combine_video_audio(
 
 
 @dataclass
-class RecordingVideo:
+class RecordingVideoFixer:
     path: Path
     logger: structlog.BoundLogger = logger
 
@@ -193,7 +230,28 @@ class RecordingVideo:
 
     @property
     def error(self):
-        return get_container_error(self.path)
+        container_error = get_container_error(self.path)
+        if container_error:
+            return container_error
+
+        if len(av.open(str(self.path)).streams.video) == 0:
+            return NoVideoStreamException()
+        if self.expected_resolution != self.video_resolution:
+            return f"invalid resolution: {'x'.join(map(str, self.video_resolution))}"
+
+    @property
+    def expected_resolution(self):
+        return EXPECTED_VIDEO_RESOLUTIONS[self.kind]
+
+    @property
+    def video_resolution(self):
+        try:
+            stream = av.open(self.path).streams.video[0]
+            return stream.width, stream.height
+        except Exception as e:
+            self.logger.warning(
+                "could not load resolution", path=self.path, error=str(e)
+            )
 
     @property
     def temp_files(self):
@@ -218,6 +276,7 @@ class RecordingVideo:
             remuxed_video = (
                 self.temp_files / self.path.with_suffix(".remuxed_video.mp4").name
             )
+            resized = self.temp_files / self.path.with_suffix(".resized.mp4").name
             fixed = self.temp_files / self.path.with_suffix(".fixed.mp4").name
 
         paths = Paths()
@@ -259,56 +318,87 @@ class RecordingVideo:
     def timestamps_from_time_file(self):
         return np.fromfile(self.paths.time_file, "<u8")
 
-    def recover(self):
-        error = self.error
-        if isinstance(error, NoVideoStreamException):
-            self.logger.warning("no video stream detected", path=self.path)
-        elif isinstance(error, av.error.InvalidDataError):
-            error_message = error.log[-1]
-            self.logger.warning(
-                "error in container detected", path=self.path, error=error_message
+    def _check_and_fix_corrupt_video(self):
+        error = get_container_error(self.path)
+        if not error:
+            return
+
+        if not isinstance(error, av.error.InvalidDataError):
+            self.logger.warning("unknown error for video", path=self.path)
+            return
+
+        error_message = error.log[-1]
+        self.logger.warning(
+            "error in container detected", path=self.path, error=error_message
+        )
+        if "header" in error_message or "moov" in error_message:
+            self.logger.info(
+                "untruncating broken video", path=self.path, error=error_message
             )
-            if "header" in error_message or "moov" in error_message:
-                self.logger.info(
-                    "untruncating broken video", path=self.path, error=error_message
-                )
-                untrunc_video(
-                    self.path, self.reference_video_path, self.paths.untrunced
-                )
-                if self.kind in VIDEO_KINDS_WITH_AUDIO:
-                    self.extract_untrunced_audio()
-                self.extract_untrunced_video()
+            untrunc_video(self.path, self.reference_video_path, self.paths.untrunced)
+            if self.kind in VIDEO_KINDS_WITH_AUDIO:
+                self.extract_untrunced_audio()
+            self.extract_untrunced_video()
 
-                remux_video_with_timestamps(
-                    self.paths.untrunced_video,
-                    self.timestamps_from_time_file,
+            remux_video_with_timestamps(
+                self.paths.untrunced_video,
+                self.timestamps_from_time_file,
+                self.paths.remuxed_video,
+            )
+
+            if self.kind in VIDEO_KINDS_WITH_AUDIO:
+                self.logger.info("combining audio and video tracks", path=self.path)
+                logger.info("combining video/audio tracks")
+                combine_video_audio(
                     self.paths.remuxed_video,
+                    self.paths.untrunced_audio,
+                    self.paths.fixed,
                 )
+            else:
+                shutil.copy(self.paths.remuxed_video, self.paths.fixed)
 
-                if self.kind in VIDEO_KINDS_WITH_AUDIO:
-                    self.logger.info("combining audio and video tracks", path=self.path)
-                    logger.info("combining video/audio tracks")
-                    combine_video_audio(
-                        self.paths.remuxed_video,
-                        self.paths.untrunced_audio,
-                        self.paths.fixed,
-                    )
-                else:
-                    shutil.copy(self.paths.remuxed_video, self.paths.fixed)
-
-                if not self.paths.backup.exists():
-                    logger.info(
-                        "backing up file",
-                        original=self.paths.original,
-                        backup=self.paths.backup,
-                    )
-                    shutil.move(self.paths.original, self.paths.backup)
-
-                logger.debug(
-                    "replacing original with recovered",
+            if not self.paths.backup.exists():
+                logger.info(
+                    "backing up file",
                     original=self.paths.original,
+                    backup=self.paths.backup,
                 )
-                shutil.move(self.paths.fixed, self.paths.original)
+                shutil.move(self.paths.original, self.paths.backup)
+
+            logger.debug(
+                "replacing original with recovered",
+                original=self.paths.original,
+            )
+            shutil.move(self.paths.fixed, self.paths.original)
+
+    def recover(self):
+        self._check_and_fix_corrupt_video()
+        self._check_and_fix_resolution()
+
+    def _check_and_fix_resolution(self):
+        if self.video_resolution is None:
+            self.logger.warning("can not get resolution for video", path=self.path)
+            return
+
+        if self.video_resolution != self.expected_resolution:
+            resize_video(
+                self.paths.original,
+                self.paths.resized,
+                self.expected_resolution,
+            )
+            if not self.paths.backup.exists():
+                logger.info(
+                    "backing up file",
+                    original=self.paths.original,
+                    backup=self.paths.backup,
+                )
+                shutil.move(self.paths.original, self.paths.backup)
+
+            logger.debug(
+                "replacing original with recovered",
+                original=self.paths.original,
+            )
+            shutil.move(self.paths.resized, self.paths.original)
 
     def __repr__(self):
         return f"<RecordingVideo({self.path})>"
@@ -420,22 +510,19 @@ class RecordingFixer:
             issues.extend(self._recover_json_file(json_file_path))
         return issues
 
-    def _process_video_files(self):
+    def _process_video_files(self, resize_video: bool = DEFAULTS.resize_video):
         issues = []
-        logger.info("checking video files")
+        logger.info("checking corrupt video files")
         for file_path in self.rec_path.glob("*.mp4"):
-            video_file = RecordingVideo(file_path, logger=self.logger)
+            video_file = RecordingVideoFixer(file_path, logger=self.logger)
             if not video_file.kind:
                 continue
             logger.debug("checking video file", path=file_path)
             error = video_file.error
-            if not error:
-                logger.info("video has no error, skipping", path=video_file.path)
-                continue
-
-            issues.append(f"{video_file.path} had error: {error}")
-            logger.warning("video has error", error=error, path=video_file.path)
-            video_file.recover()
+            if error:
+                issues.append(f"{video_file.path} had container error: {error}")
+                logger.warning("video has error", error=error, path=video_file.path)
+                video_file.recover()
 
         return issues
 
@@ -579,7 +666,7 @@ class RecordingFixer:
                         shutil.move(time_aux_file_path, time_file_path)
         return issues
 
-    def process(self):
+    def process(self, resize_video: bool = DEFAULTS.resize_video):
         issues = []
 
         # must run in order since some depend on previous files to be correct
@@ -588,7 +675,7 @@ class RecordingFixer:
             issues.extend(self._process_time_files())
             issues.extend(self._process_info_json())
             issues.extend(self._process_event_files())
-            issues.extend(self._process_video_files())
+            issues.extend(self._process_video_files(resize_video=resize_video))
         finally:
             if self.cleanup_temp_files and self.temp_file_path.exists():
                 logger.warning(
@@ -606,13 +693,19 @@ cli = typer.Typer(help="Recording Fixer", no_args_is_help=True)
 
 
 @cli.command()
-def recover_recording(rec_path: Path, cleanup_temp_files: bool = True):
+def recover_recording(
+    rec_path: Path,
+    cleanup_temp_files: bool = True,
+    resize_video: Annotated[
+        bool, typer.Argument(help="Resize video")
+    ] = DEFAULTS.resize_video,
+):
     """
     Recover a recording
     """
     logger.info("fixing recording path", path=rec_path)
     fixer = RecordingFixer(rec_path, cleanup_temp_files=cleanup_temp_files)
-    errors = fixer.process()
+    errors = fixer.process(resize_video=resize_video)
     return errors
 
 
