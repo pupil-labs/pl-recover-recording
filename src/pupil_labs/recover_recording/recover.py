@@ -60,7 +60,7 @@ class NoVideoStreamException(Exception): ...
 
 
 class DEFAULTS:
-    resize_video: bool = False
+    resize_video: bool = True
 
 
 class VideoKind(enum.Enum):
@@ -246,7 +246,7 @@ class RecordingVideoFixer:
     @property
     def video_resolution(self):
         try:
-            stream = av.open(self.path).streams.video[0]
+            stream = av.open(str(self.path)).streams.video[0]
             return stream.width, stream.height
         except Exception as e:
             self.logger.warning(
