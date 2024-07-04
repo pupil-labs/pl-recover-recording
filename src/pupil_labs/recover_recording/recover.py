@@ -372,6 +372,9 @@ class RecordingVideoFixer:
             shutil.move(self.paths.fixed, self.paths.original)
 
     def recover(self):
+        if self.path.stat().st_size < 500000:
+            self.logger.warning("video too small", path=self.path)
+            return
         self._check_and_fix_corrupt_video()
         self._check_and_fix_resolution()
 
