@@ -483,8 +483,8 @@ class RecordingFixer:
 
         duration = info.get("duration")
         if not duration or duration > MAX_RECORDING_DURATION_NANOSECS:
-            logger.warning("info.json had 0 duration", path=info_json_file)
-            issues.append("info.json had 0 duration")
+            logger.warning(f"info.json had invalid duration", duration=duration, path=info_json_file)
+            issues.append(f"info.json had invalid duration: {duration}")
             max_timestamp = self._find_max_timestamp_from_time_files()
             potential_duration = max_timestamp - info["start_time"]
 
