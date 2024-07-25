@@ -54,10 +54,10 @@ broken video. Reference videos have already been created for Neon recordings.
 
 ##### Scene
 
-- scene reference video is created by muxing a pi recording audio track (41,000hz)
+- Scene reference video is created by muxing a pi recording audio track (41,000hz)
   with a neon video track
 
 ##### Sensor
 
-- sensor reference video is created by taking a regular Neon Sensor Module video
+- Sensor reference video is created by taking a regular Neon Sensor Module video
 
