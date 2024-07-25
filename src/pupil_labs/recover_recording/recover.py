@@ -33,6 +33,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlparse
 
 import av
 import av.error
@@ -96,11 +97,20 @@ TIME_KIND_FILE_PATTERN = re.compile(r"^.+\.time_?(hw|aux)?$")
 
 
 def get_container_error(video_file_path):
-    try:
-        container = av.open(str(video_file_path))
-        container.seek(1)
-    except Exception as exc:
-        return exc
+    with av.logging.Capture() as av_logs:
+        error = ""
+        try:
+            c = av.open(str(video_file_path))
+            next(c.decode(video=0))
+        except av.error.InvalidDataError as e:
+            error_str = "?"
+            if e.log:
+                error_str = " - ".join([str(part) for part in e.log])
+            error = f"corrupt video: {error_str}"
+        except Exception as e:
+            error = f"error: {e.__class__.__name__} {av_logs}"
+        if error:
+            return error
 
 
 def run_command(args: list[str]):
@@ -216,15 +226,31 @@ def combine_video_audio(
     return run_command(ffmpeg_combine_video_audio_args)
 
 
+HTTPPath = str
+
+
 @dataclass
 class RecordingVideoFixer:
-    path: Path
+    path: Path | HTTPPath | str
     logger: structlog.BoundLogger = logger
+
+    def __post_init__(self):
+        if str(self.path).startswith("http"):
+            self.path = HTTPPath(self.path)
+        else:
+            self.path = Path(self.path)
+
+    @property
+    def filename(self):
+        if isinstance(self.path, Path):
+            return self.path.name
+        parsed = urlparse(self.path)
+        return parsed.path.split("/")[-1]
 
     @property
     def kind(self) -> VideoKind | None:
         for video_kind, pattern in VIDEO_KIND_FILE_PATTERNS.items():
-            if pattern.findall(self.path.name):
+            if pattern.findall(self.filename):
                 return video_kind
         return None
 
@@ -372,6 +398,9 @@ class RecordingVideoFixer:
             shutil.move(self.paths.fixed, self.paths.original)
 
     def recover(self):
+        if not isinstance(self.path, Path):
+            raise Exception("can only recover files on disk")
+
         if self.path.stat().st_size < 500000:
             self.logger.warning("video too small", path=self.path)
             return
