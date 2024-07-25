@@ -33,7 +33,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import av
 import av.error
@@ -245,7 +245,7 @@ class RecordingVideoFixer:
         if isinstance(self.path, Path):
             return self.path.name
         parsed = urlparse(self.path)
-        return parsed.path.split("/")[-1]
+        return unquote(parsed.path.split("/")[-1])
 
     @property
     def kind(self) -> VideoKind | None:
@@ -512,7 +512,11 @@ class RecordingFixer:
 
         duration = info.get("duration")
         if not duration or duration > MAX_RECORDING_DURATION_NANOSECS:
-            logger.warning(f"info.json had invalid duration", duration=duration, path=info_json_file)
+            logger.warning(
+                f"info.json had invalid duration",
+                duration=duration,
+                path=info_json_file,
+            )
             issues.append(f"info.json had invalid duration: {duration}")
             max_timestamp = self._find_max_timestamp_from_time_files()
             potential_duration = max_timestamp - info["start_time"]
