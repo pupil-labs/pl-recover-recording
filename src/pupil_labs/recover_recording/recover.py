@@ -346,15 +346,16 @@ class RecordingVideoFixer:
         return np.fromfile(self.paths.time_file, "<u8")
 
     def _check_and_fix_corrupt_video(self):
-        error = get_container_error(self.path)
-        if not error:
+        error_message = get_container_error(self.path)
+        if not error_message:
             return
 
-        if "corrupt video" not in error:
-            self.logger.warning("not an error we can fix", path=self.path, error=error)
+        if "corrupt video" not in error_message:
+            self.logger.warning(
+                "not an error we can fix", path=self.path, error=error_message
+            )
             return
 
-        error_message = error.log[-1]
         self.logger.warning(
             "error in container detected", path=self.path, error=error_message
         )
