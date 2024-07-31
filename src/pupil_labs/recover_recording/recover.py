@@ -350,8 +350,8 @@ class RecordingVideoFixer:
         if not error:
             return
 
-        if not isinstance(error, av.error.InvalidDataError):
-            self.logger.warning("unknown error for video", path=self.path)
+        if "corrupt video" not in error:
+            self.logger.warning("not an error we can fix", path=self.path, error=error)
             return
 
         error_message = error.log[-1]
