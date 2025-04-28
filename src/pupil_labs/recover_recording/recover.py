@@ -96,6 +96,40 @@ JSON_KIND_FILE_PATTERN = re.compile(r"^(info|template|wearer)\.json$")
 TIME_KIND_FILE_PATTERN = re.compile(r"^.+\.time_?(hw|aux)?$")
 
 
+class CameraCalibrationV2(object):
+    """Class for converting v2 neon camera intrinsics/extrinsics from binary/json format"""
+
+    dtype = np.dtype(
+        [
+            ("version", "u1"),
+            ("serial", "6a"),
+            ("scene_camera_matrix", "(3,3)d"),
+            ("scene_distortion_coefficients", "8d"),
+            ("scene_extrinsics_affine_matrix", "(4,4)d"),
+            ("right_camera_matrix", "(3,3)d"),
+            ("right_distortion_coefficients", "8d"),
+            ("right_extrinsics_affine_matrix", "(4,4)d"),
+            ("left_camera_matrix", "(3,3)d"),
+            ("left_distortion_coefficients", "8d"),
+            ("left_extrinsics_affine_matrix", "(4,4)d"),
+            ("crc", "u4"),
+        ]
+    )
+
+    @classmethod
+    def binary_to_json(cls, bytes_object):
+        calibration_data = np.frombuffer(
+            bytes_object,
+            cls.dtype,
+        )[0]
+        result = {
+            name: calibration_data[name].tolist()
+            for name in calibration_data.dtype.names
+        }
+        result["serial"] = calibration_data["serial"].decode("utf8")
+        return result
+
+
 def get_container_error(video_file_path):
     av.logging.set_level(av.logging.INFO)
     with av.logging.Capture() as av_logs:
@@ -533,6 +567,34 @@ class RecordingFixer:
                     "UTF-8"
                 )
                 info_json_file.write_bytes(new_json_bytes)
+
+        # recover module_serial_number of Neon recording's info.json
+        module_serial_number = info.get("module_serial_number")
+        not_pi = "scene_camera_serial_number" not in info
+
+        if not module_serial_number and not_pi:
+            logger.warning("fixing Neon's module_serial_number in info.json")
+            calibration_bin_file = self.rec_path / "calibration.bin"
+            try:
+                # this exact message is being used for sending alert
+                issues.append(f"missing module_serial_number")
+                # read Neon's calibration file
+                data = CameraCalibrationV2.binary_to_json(
+                    calibration_bin_file.read_bytes()
+                )
+                info["module_serial_number"] = data["serial"]
+                new_json_bytes = json.dumps(info, indent=2, sort_keys=True).encode(
+                    "UTF-8"
+                )
+                info_json_file.write_bytes(new_json_bytes)
+            except Exception as err:
+                logger.error(
+                    f"error fixing Neon's module_serial_number in info.json: {err}"
+                )
+                issues.append(
+                    f"failed to fix missing module_serial_number in info.json"
+                )
+
         return issues
 
     def _process_json_files(self):
