@@ -364,7 +364,12 @@ class RecordingVideoFixer:
             self.logger.info(
                 "untruncating broken video", path=self.path, error=error_message
             )
-            untrunc_video(self.path, self.reference_video_path, self.paths.untrunced)
+            try:
+                untrunc_video(
+                    self.path, self.reference_video_path, self.paths.untrunced
+                )
+            except Exception:
+                return
             if self.kind in VIDEO_KINDS_WITH_AUDIO:
                 self.extract_untrunced_audio()
             self.extract_untrunced_video()
