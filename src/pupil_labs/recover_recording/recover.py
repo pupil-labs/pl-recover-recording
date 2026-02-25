@@ -30,6 +30,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
@@ -94,40 +95,6 @@ EXPECTED_VIDEO_RESOLUTIONS = {
 VIDEO_KINDS_WITH_AUDIO = {VideoKind.NEON_SCENE_CAMERA, VideoKind.PI_WORLD_CAMERA}
 JSON_KIND_FILE_PATTERN = re.compile(r"^(info|template|wearer)\.json$")
 TIME_KIND_FILE_PATTERN = re.compile(r"^.+\.time_?(hw|aux)?$")
-
-
-class CameraCalibrationV2(object):
-    """Class for converting v2 neon camera intrinsics/extrinsics from binary/json format"""
-
-    dtype = np.dtype(
-        [
-            ("version", "u1"),
-            ("serial", "6a"),
-            ("scene_camera_matrix", "(3,3)d"),
-            ("scene_distortion_coefficients", "8d"),
-            ("scene_extrinsics_affine_matrix", "(4,4)d"),
-            ("right_camera_matrix", "(3,3)d"),
-            ("right_distortion_coefficients", "8d"),
-            ("right_extrinsics_affine_matrix", "(4,4)d"),
-            ("left_camera_matrix", "(3,3)d"),
-            ("left_distortion_coefficients", "8d"),
-            ("left_extrinsics_affine_matrix", "(4,4)d"),
-            ("crc", "u4"),
-        ]
-    )
-
-    @classmethod
-    def binary_to_json(cls, bytes_object):
-        calibration_data = np.frombuffer(
-            bytes_object,
-            cls.dtype,
-        )[0]
-        result = {
-            name: calibration_data[name].tolist()
-            for name in calibration_data.dtype.names
-        }
-        result["serial"] = calibration_data["serial"].decode("utf8")
-        return result
 
 
 def get_container_error(video_file_path):
@@ -545,11 +512,13 @@ class RecordingFixer:
         info_json_file = self.rec_path / "info.json"
         info_json_backup_file = self.rec_path / "info.json.original.json"
         info = json.loads(info_json_file.read_bytes())
+        fixed_info = deepcopy(info)
 
+        # fix invalid duration in info
         duration = info.get("duration")
         if not duration or duration > MAX_RECORDING_DURATION_NANOSECS:
             logger.warning(
-                f"info.json had invalid duration",
+                "info.json had invalid duration",
                 duration=duration,
                 path=info_json_file,
             )
@@ -558,42 +527,31 @@ class RecordingFixer:
             potential_duration = max_timestamp - info["start_time"]
 
             if potential_duration < MAX_RECORDING_DURATION_NANOSECS:
-                if not info_json_backup_file.exists():
-                    logger.info("backing up info.json", path=info_json_backup_file)
-                    shutil.move(info_json_file, info_json_backup_file)
-
-                info["duration"] = int(potential_duration)
-                new_json_bytes = json.dumps(info, indent=2, sort_keys=True).encode(
-                    "UTF-8"
-                )
-                info_json_file.write_bytes(new_json_bytes)
+                fixed_info["duration"] = int(potential_duration)
 
         # recover module_serial_number of Neon recording's info.json
         module_serial_number = info.get("module_serial_number")
-        not_pi = "scene_camera_serial_number" not in info
-
-        if not module_serial_number and not_pi:
+        data_format_major = int(info.get("data_format_version", "1.0").split(".")[0])
+        if not module_serial_number and data_format_major == 2:
             logger.warning("fixing Neon's module_serial_number in info.json")
             calibration_bin_file = self.rec_path / "calibration.bin"
             try:
-                # this exact message is being used for sending alert
-                issues.append(f"missing module_serial_number")
-                # read Neon's calibration file
-                data = CameraCalibrationV2.binary_to_json(
-                    calibration_bin_file.read_bytes()
-                )
-                info["module_serial_number"] = data["serial"]
-                new_json_bytes = json.dumps(info, indent=2, sort_keys=True).encode(
-                    "UTF-8"
-                )
-                info_json_file.write_bytes(new_json_bytes)
+                # neon calibration has format of [1u (version), 6a (serial), ...]
+                serial = np.fromfile(calibration_bin_file, dtype="7a")[0][1:].decode()
+                fixed_info["module_serial_number"] = serial
+                issues.append("missing module_serial_number")
             except Exception as err:
                 logger.error(
                     f"error fixing Neon's module_serial_number in info.json: {err}"
                 )
-                issues.append(
-                    f"failed to fix missing module_serial_number in info.json"
-                )
+                issues.append("failed to fix missing module_serial_number in info.json")
+
+        if fixed_info != info:
+            if not info_json_backup_file.exists():
+                logger.info("backing up info.json", path=info_json_backup_file)
+                shutil.move(info_json_file, info_json_backup_file)
+            new_json_bytes = json.dumps(fixed_info, indent=2, sort_keys=True).encode()
+            info_json_file.write_bytes(new_json_bytes)
 
         return issues
 
@@ -720,7 +678,7 @@ class RecordingFixer:
                 hw_ts = np.fromfile(time_file_path, "<i8")
                 if not np.all(np.diff(hw_ts) > 0):
                     logger.warning(
-                        f"hw timestamps not monotonic",
+                        "hw timestamps not monotonic",
                         path=time_file_path,
                     )
                     issues.append(f"hw timestamps not monotonic for {time_file_path}")
@@ -732,7 +690,7 @@ class RecordingFixer:
                 sw_ts = np.fromfile(time_aux_file_path, "<i8")
                 if not np.all(np.diff(sw_ts) > 0):
                     logger.warning(
-                        f"sw timestamps not monotonic",
+                        "sw timestamps not monotonic",
                         path=time_aux_file_path,
                     )
                     issues.append(
