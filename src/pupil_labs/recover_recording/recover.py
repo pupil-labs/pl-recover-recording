@@ -368,7 +368,8 @@ class RecordingVideoFixer:
                 untrunc_video(
                     self.path, self.reference_video_path, self.paths.untrunced
                 )
-            except Exception:
+            except Exception as e:
+                logger.warning(f"failed to untrunc {self.path}: {e}")
                 return
             if self.kind in VIDEO_KINDS_WITH_AUDIO:
                 self.extract_untrunced_audio()
