@@ -99,10 +99,16 @@ TIME_KIND_FILE_PATTERN = re.compile(r"^.+\.time_?(hw|aux)?$")
 
 def get_container_error(video_file_path):
     av.logging.set_level(av.logging.INFO)
+    format = None
+    if "mjpeg" in video_file_path:
+        format = "mjpeg"
+    if "mp4" in video_file_path:
+        format = "mp4"
+
     with av.logging.Capture() as av_logs:
         error = ""
         try:
-            c = av.open(str(video_file_path))
+            c = av.open(str(video_file_path), format=format)
             next(c.decode(video=0))
         except av.error.InvalidDataError as e:
             error_str = "?"
