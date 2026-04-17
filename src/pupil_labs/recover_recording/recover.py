@@ -100,9 +100,9 @@ TIME_KIND_FILE_PATTERN = re.compile(r"^.+\.time_?(hw|aux)?$")
 def get_container_error(video_file_path):
     av.logging.set_level(av.logging.INFO)
     format = None
-    if "mjpeg" in video_file_path:
+    if "mjpeg" in str(video_file_path):
         format = "mjpeg"
-    if "mp4" in video_file_path:
+    if "mp4" in str(video_file_path):
         format = "mp4"
 
     with av.logging.Capture() as av_logs:
